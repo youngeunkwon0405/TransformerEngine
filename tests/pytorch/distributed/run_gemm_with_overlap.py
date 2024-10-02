@@ -67,6 +67,9 @@ def _parse_args(argv=None, namespace=None):
         "--atomic", action="store_true", default=False, help="Test overlap with atomic GEMM."
     )
     parser.add_argument(
+        "--profile", action="store_true", default=False, help="Nsys profile."
+    )
+    parser.add_argument(
         "--aggregate",
         action="store_true",
         default=False,
@@ -356,10 +359,10 @@ def _main(opts):
             0,  # Node ID
             1,  # Number of nodes
             tp_size,  # Tensor-parallel group size (may be different than LOCAL_SIZE)
-            16,  # Number of communication SMs
+            32,  # Number of communication SMs : YOUNGEUNK it was 16
             2,  # CGA cluster size
             4,  # Number of communication splits
-            True,  # Set SM margin
+            False,  # Set SM margin : YOUNGEUNK it was True
             3,  # Max concurrent GEMM streams
             opts.atomic,  # Use a single GEMM with atomic-counters
             ub_callbacks,
@@ -718,6 +721,9 @@ def _main(opts):
     start_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
     end_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
     torch.cuda.synchronize()
+    if opts.profile and LOCAL_RANK == 0:
+        print("== Start profiling ==")
+        torch.cuda.cudart().cudaProfilerStart()
 
     if opts.use_cuda_graphs:
         # Trace the CUDA graph first
@@ -747,6 +753,7 @@ def _main(opts):
                 all_outputs = _fp8_gemm()
                 end_events[i].record()
                 if ub_obj2 is not None:
+                    print('YOUNGEUNK: ub_obj2')
                     _fp8_gemm2(all_outputs[0])
             else:
                 start_events[i].record()
@@ -754,6 +761,10 @@ def _main(opts):
                 end_events[i].record()
 
     torch.cuda.synchronize()
+    if opts.profile and LOCAL_RANK == 0:
+        print("== Finished profiling ==")
+        torch.cuda.cudart().cudaProfilerStop()
+
     gpu_times = [
         s.elapsed_time(e)
         for s, e in zip(start_events[opts.warmup_iters :], end_events[opts.warmup_iters :])

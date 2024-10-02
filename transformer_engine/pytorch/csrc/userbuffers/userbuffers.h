@@ -212,6 +212,9 @@ int register_user_buffer_collective(void **gpubuff, size_t bytes, communicator *
 // for TP-parallelism, only single node is implemented
 void allgather2_userbuff_inplace(const int handler, const int offset, const int elements,
                                  communicator *comm, cudaStream_t stream = 0);
+//YOUNGEUNK
+void allgather2_userbuff_inplace_fdl(const int handler, const int offset, const int elements,
+                                 communicator *comm, cudaEvent_t comm_launch_event, cudaStream_t stream = 0);
 /*
 each Rank input is
 allgather2_userbuff_inplace: offset+myrank*elements

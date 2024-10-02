@@ -1366,6 +1366,14 @@ __global__ void __launch_bounds__(MAX_THREADS)
   cfg.attrs = attribute_ub;                                                          \
   cfg.numAttrs = comm->sm_arch >= 9 ? 2 : 1;
 
+#define SETUP_LAUNCH_CONFIG_FOR_FDL(sms, threads, stream, comm_launch_event)         \
+  cudaLaunchConfig_t cfg = {sms, threads, 0, stream, NULL, 0};                       \
+  cudaLaunchAttribute attr = {};                                                     \
+  attr.id = cudaLaunchAttributeLaunchCompletionEvent;                                \
+  attr.val.launchCompletionEvent.event = comm_launch_event;                          \
+  cfg.attrs = &attr;                                                                 \
+  cfg.numAttrs = 1;
+
 #define callranks_ag(x)                                                                            \
   if (ar_nvsize == x) {                                                                            \
     int arg1 = op - NVTE_MAX_OPS,                                                                  \
@@ -1767,6 +1775,28 @@ void allgather2_userbuff_inplace(const int handler, const int offset, const int 
   if (warps < ar_nvsize) warps = ar_nvsize;
 
   SETUP_LAUNCH_CONFIG(sms, warps * 32, stream);
+  if (comm->use_mc && (comm->memflags[handler] & UB_MEM_MC_CREATED)) {
+    callranks_agMC(2) callranks_agMC(4) callranks_agMC(8)
+  } else {
+    callranks_ag(2) callranks_ag(4) callranks_ag(8)
+  }
+}
+
+void allgather2_userbuff_inplace_fdl(const int handler, const int offset, const int elements,
+                                 communicator *comm, cudaEvent_t comm_launch_event, cudaStream_t stream) {
+  const int op = userbuffers_allreduceop_nonsharp2;
+  const int ar_firstgpu =
+      op == userbuffers_allreduceop_nonsharp ? comm->ar_firstgpu : comm->ar2_firstgpu;
+  const int ar_step = op == userbuffers_allreduceop_nonsharp2 ? 1 : comm->ar2_nvsize;
+  const int ar_nvsize = op == userbuffers_allreduceop_nonsharp ? comm->ar_nvsize : comm->ar2_nvsize;
+  const int ar_nvrank = op == userbuffers_allreduceop_nonsharp ? comm->ar_nvrank : comm->ar2_nvrank;
+
+  if (elements < 64) return;
+  int sms = ar_nvsize == 1 ? 2 : comm->sms;
+  int warps = comm->threads / 32;
+  if (warps < ar_nvsize) warps = ar_nvsize;
+
+  SETUP_LAUNCH_CONFIG_FOR_FDL(sms, warps * 32, stream, comm_launch_event);
   if (comm->use_mc && (comm->memflags[handler] & UB_MEM_MC_CREATED)) {
     callranks_agMC(2) callranks_agMC(4) callranks_agMC(8)
   } else {

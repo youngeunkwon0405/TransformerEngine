@@ -17,10 +17,10 @@ if torch.cuda.device_count() < 2:
 fp8_available, reason_for_no_fp8 = FP8GlobalStateManager.is_fp8_available()
 
 RNG_SEED: int = 1234
-SEQ_LENGTH: int = 512
+SEQ_LENGTH: int = 152
 BATCH_SIZE: int = 2
-NUM_HEADS: int = 12
-HEAD_DIM: int = 64
+NUM_HEADS: int = 32
+HEAD_DIM: int = 1024
 TE_LAYERS = [
     te.Linear,
     te.LayerNormLinear,
@@ -42,6 +42,7 @@ if not tex.device_supports_multicast():
 # Force GPU kernels to launch in the order they're executed by the host CPU
 os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
 
+print('YOUNGEUNK')
 
 def _run_gemm_with_overlap(comm_type, bulk, p2p, atomic, fp8_in, fp8_out, aggregate):
     test_path = TEST_ROOT / "run_gemm_with_overlap.py"
@@ -74,6 +75,7 @@ def _run_gemm_with_overlap(comm_type, bulk, p2p, atomic, fp8_in, fp8_out, aggreg
                 pytest.skip("Device compute capability 9.0 or higher required for Atomic GEMM.")
             test_cmd.append("--atomic")
 
+    print(f"YOUNGEUNK:\ntest_cmd:{test_cmd}\nenv:{os.environ}\n")
     result = subprocess.run(test_cmd, env=os.environ, capture_output=True, check=False)
     if (
         result.returncode != 0

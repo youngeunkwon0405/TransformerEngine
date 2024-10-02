@@ -153,7 +153,7 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
   torch::Tensor counter;
   at::cuda::CUDAStream _stream_comm = at::cuda::getStreamFromPool(true);
   std::vector<at::cuda::CUDAStream> _stream_compute;
-  cudaEvent_t _start_compute, _stop_compute, _start_d2dcopy, _start_comm, _stop_comm;
+  cudaEvent_t _start_compute, _stop_compute, _start_d2dcopy, _start_comm, _stop_comm, _comm_launch_event;
   int _num_comm_sm;
   int _cga_size;
   int _use_ce;
@@ -224,6 +224,8 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
     cudaEventCreateWithFlags(&_start_d2dcopy, 0);
     cudaEventCreateWithFlags(&_start_comm, 0);
     cudaEventCreateWithFlags(&_stop_comm, 0);
+    cudaEventCreateWithFlags(&_comm_launch_event, cudaEventDisableTiming);
+    printf("[YOUNGEUNK]: CUDA EVENT CREATION\n");
   }
 
   ~UbufCommOverlap() {
@@ -232,6 +234,7 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
     cudaEventDestroy(_start_d2dcopy);
     cudaEventDestroy(_stop_compute);
     cudaEventDestroy(_start_compute);
+    cudaEventDestroy(_comm_launch_event);
 
     for (size_t i = 0; i < _stream_compute.size(); i++) cudaStreamDestroy(_stream_compute[i]);
 
@@ -265,6 +268,7 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
     char *ubuf_wt_ptr = reinterpret_cast<char *>(_ubuf.data_ptr());
     int comm_elements = (_ubuf.numel() / 2) * _ubuf.element_size();  // UBUF uses 2Byte element size
     COMM_TYPE _comm_type = static_cast<COMM_TYPE>(comm_type);
+    printf("!!! [YOUNGEUNK] bulk_overlap \n");
     if (_comm_type == COMM_TYPE::RS) {
       ubuf_wt_ptr += _ubuf.numel() / _tp_size * _tp_id * _ubuf.element_size();
     }
@@ -276,7 +280,8 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
 
     // Communication: AG and RS
     if (_comm_type == COMM_TYPE::AG) {
-      allgather2_userbuff_inplace(_ub_reg, 0, comm_elements, _ub_comm, (cudaStream_t)_stream_comm);
+      printf("!!! [YOUNGEUNK] fdl allgather2 call \n");
+      allgather2_userbuff_inplace_fdl(_ub_reg, 0, comm_elements, _ub_comm, (cudaEvent_t)_comm_launch_event, (cudaStream_t)_stream_comm);
     } else if (_comm_type == COMM_TYPE::RS) {
       if (_ubuf.element_size() == 1) {
         assert(_ubuf_scale_inv_initialized);
@@ -302,6 +307,8 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
     if (B_scale_inverse.numel()) B_scale_inverse = B_scale_inverse[B_fp8_tensor];
 
     assert(pre_gelu_out.numel() == 0);
+    //YOUNGEUNK: Since the te_gemm is launched on the default stream, wait from default stream. 
+    NVTE_CHECK_CUDA(cudaStreamWaitEvent((cudaStream_t)stream_main, _comm_launch_event, 0)); //YOUNGEUNK
     te_gemm(A, A_scale_inverse, A_type, transa, B, B_scale_inverse, B_type, transb, D, D_scale,
             D_type, D_amax, bias, bias_type, pre_gelu_out, grad, workspace, workspaceSize,
             accumulate, use_split_accumulator, _math_sms);
