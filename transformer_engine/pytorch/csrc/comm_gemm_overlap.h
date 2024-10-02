@@ -225,7 +225,7 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
     cudaEventCreateWithFlags(&_start_comm, 0);
     cudaEventCreateWithFlags(&_stop_comm, 0);
     cudaEventCreateWithFlags(&_comm_launch_event, cudaEventDisableTiming);
-    printf("[YOUNGEUNK]: CUDA EVENT CREATION\n");
+    printf("!!! [UB] CUDA EVENT CREATION\n");
   }
 
   ~UbufCommOverlap() {
@@ -280,8 +280,9 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
 
     // Communication: AG and RS
     if (_comm_type == COMM_TYPE::AG) {
-      printf("!!! [YOUNGEUNK] fdl allgather2 call \n");
-      allgather2_userbuff_inplace_fdl(_ub_reg, 0, comm_elements, _ub_comm, (cudaEvent_t)_comm_launch_event, (cudaStream_t)_stream_comm);
+      printf("!!! [YOUNGEUNK][FDL] fdl allgather2 call \n");
+      allgather2_userbuff_inplace(_ub_reg, 0, comm_elements, _ub_comm, (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event);
+      // allgather2_userbuff_inplace_fdl(_ub_reg, 0, comm_elements, _ub_comm, (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event);
     } else if (_comm_type == COMM_TYPE::RS) {
       if (_ubuf.element_size() == 1) {
         assert(_ubuf_scale_inv_initialized);
@@ -291,12 +292,14 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
         assert(rs_output.size(0) == _ubuf.size(0) / _tp_size);
         assert(rs_output.element_size() == 2);
         char *rs_output_ptr = reinterpret_cast<char *>(rs_output.data_ptr());
+        printf("!!! [YOUNGEUNK][FDL] fdl reducescatter2_userbuff_fp8 call \n");
         reducescatter2_userbuff_fp8<__nv_fp8_e5m2>(rs_output_ptr, scale_inv_ptr, _ub_reg, 0,
                                                    comm_elements, _ub_comm,
-                                                   (cudaStream_t)_stream_comm);
+                                                   (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event);
       } else {
+        printf("!!! [YOUNGEUNK][FDL] fdl reducescatter2_userbuff_inplace call \n");
         reducescatter2_userbuff_inplace(_ub_reg, 0, comm_elements, _ub_comm,
-                                        (cudaStream_t)_stream_comm);
+                                        (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event);
       }
     } else {
       NVTE_ERROR("Not supported communication type.");

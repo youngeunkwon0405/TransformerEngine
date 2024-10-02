@@ -359,10 +359,10 @@ def _main(opts):
             0,  # Node ID
             1,  # Number of nodes
             tp_size,  # Tensor-parallel group size (may be different than LOCAL_SIZE)
-            32,  # Number of communication SMs : YOUNGEUNK it was 16
+            16,  # Number of communication SMs
             2,  # CGA cluster size
             4,  # Number of communication splits
-            False,  # Set SM margin : YOUNGEUNK it was True
+            True,  # Set SM margin
             3,  # Max concurrent GEMM streams
             opts.atomic,  # Use a single GEMM with atomic-counters
             ub_callbacks,
