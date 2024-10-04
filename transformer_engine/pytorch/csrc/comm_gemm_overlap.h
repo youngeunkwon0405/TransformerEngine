@@ -224,8 +224,27 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
     cudaEventCreateWithFlags(&_start_d2dcopy, 0);
     cudaEventCreateWithFlags(&_start_comm, 0);
     cudaEventCreateWithFlags(&_stop_comm, 0);
-    cudaEventCreateWithFlags(&_comm_launch_event, cudaEventDisableTiming);
-    printf("!!! [UB] CUDA EVENT CREATION\n");
+    
+    //FDL related
+    int max_connection = transformer_engine::getenv<int>("CUDA_DEVICE_MAX_CONNECTIONS", 8);
+    if (max_connection > 1){
+      cudaEventCreateWithFlags(&_comm_launch_event, cudaEventDisableTiming);
+      printf("!!! [UB][FDL] CUDA EVENT CREATION\n");
+    }
+    else{
+      _comm_launch_event = 0;
+      printf("!!! [UB] non-FDL CUDA EVENT CREATION\n");
+    }
+
+    // const char* max_connection = std::getenv("CUDA_DEVICE_MAX_CONNECTIONS");
+    // if (max_connection == nullptr || std::strcmp(max_connection, "1") != 0){
+    //   cudaEventCreateWithFlags(&_comm_launch_event, cudaEventDisableTiming);
+    //   printf("!!! [UB][FDL] CUDA EVENT CREATION\n");
+    // }
+    // else{
+    //   _comm_launch_event = 0;
+    //   printf("!!! [UB] non-FDL CUDA EVENT CREATION\n");
+    // }
   }
 
   ~UbufCommOverlap() {
@@ -234,8 +253,9 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
     cudaEventDestroy(_start_d2dcopy);
     cudaEventDestroy(_stop_compute);
     cudaEventDestroy(_start_compute);
-    cudaEventDestroy(_comm_launch_event);
-
+    if(_comm_launch_event){
+      cudaEventDestroy(_comm_launch_event);
+    }
     for (size_t i = 0; i < _stream_compute.size(); i++) cudaStreamDestroy(_stream_compute[i]);
 
     if (comm_created) {
@@ -268,7 +288,7 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
     char *ubuf_wt_ptr = reinterpret_cast<char *>(_ubuf.data_ptr());
     int comm_elements = (_ubuf.numel() / 2) * _ubuf.element_size();  // UBUF uses 2Byte element size
     COMM_TYPE _comm_type = static_cast<COMM_TYPE>(comm_type);
-    printf("!!! [YOUNGEUNK] bulk_overlap \n");
+    // printf("!!! [YOUNGEUNK] bulk_overlap \n");
     if (_comm_type == COMM_TYPE::RS) {
       ubuf_wt_ptr += _ubuf.numel() / _tp_size * _tp_id * _ubuf.element_size();
     }
@@ -280,7 +300,7 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
 
     // Communication: AG and RS
     if (_comm_type == COMM_TYPE::AG) {
-      printf("!!! [YOUNGEUNK][FDL] fdl allgather2 call \n");
+      // printf("!!! [YOUNGEUNK][FDL] fdl allgather2 call \n");
       allgather2_userbuff_inplace(_ub_reg, 0, comm_elements, _ub_comm, (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event);
       // allgather2_userbuff_inplace_fdl(_ub_reg, 0, comm_elements, _ub_comm, (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event);
     } else if (_comm_type == COMM_TYPE::RS) {
@@ -292,12 +312,12 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
         assert(rs_output.size(0) == _ubuf.size(0) / _tp_size);
         assert(rs_output.element_size() == 2);
         char *rs_output_ptr = reinterpret_cast<char *>(rs_output.data_ptr());
-        printf("!!! [YOUNGEUNK][FDL] fdl reducescatter2_userbuff_fp8 call \n");
+        // printf("!!! [YOUNGEUNK][FDL] fdl reducescatter2_userbuff_fp8 call \n");
         reducescatter2_userbuff_fp8<__nv_fp8_e5m2>(rs_output_ptr, scale_inv_ptr, _ub_reg, 0,
                                                    comm_elements, _ub_comm,
                                                    (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event);
       } else {
-        printf("!!! [YOUNGEUNK][FDL] fdl reducescatter2_userbuff_inplace call \n");
+        // printf("!!! [YOUNGEUNK][FDL] fdl reducescatter2_userbuff_inplace call \n");
         reducescatter2_userbuff_inplace(_ub_reg, 0, comm_elements, _ub_comm,
                                         (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event);
       }
@@ -311,7 +331,7 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
 
     assert(pre_gelu_out.numel() == 0);
     //YOUNGEUNK: Since the te_gemm is launched on the default stream, wait from default stream. 
-    NVTE_CHECK_CUDA(cudaStreamWaitEvent((cudaStream_t)stream_main, _comm_launch_event, 0)); //YOUNGEUNK
+    if(_comm_launch_event) NVTE_CHECK_CUDA(cudaStreamWaitEvent((cudaStream_t)stream_main, _comm_launch_event, 0)); //YOUNGEUNK
     te_gemm(A, A_scale_inverse, A_type, transa, B, B_scale_inverse, B_type, transb, D, D_scale,
             D_type, D_amax, bias, bias_type, pre_gelu_out, grad, workspace, workspaceSize,
             accumulate, use_split_accumulator, _math_sms);
@@ -461,6 +481,7 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
     int input_a_chunk_size = m_chunk * k;
     int output_chunk_size = n * m_chunk;
     int workspace_size_chunk = workspaceSize / _stream_compute.size();
+    // printf("!!! [YOUNGEUNK] split_overlap_rs \n");
 
     // Get input, output, and workspace data pointers
     char *input_a_chunk_ptr = reinterpret_cast<char *>(A.data_ptr());
@@ -484,6 +505,7 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
     assert(pre_gelu_out.numel() == 0);
 
     if (gemm_overlap) {
+      // printf("!!! [YOUNGEUNK] split_overlap_rs gemm_overlap \n");
       torch::Tensor input_a_chunk = torch::from_blob(input_a_chunk_ptr, {m_chunk, k}, A.options());
       torch::Tensor output_chunk =
           torch::from_blob(output_buf_chunk_ptr, {n, m_chunk}, _ubuf.options());
@@ -495,6 +517,7 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
               workspace_chunk, workspace_size_chunk, accumulate, use_split_accumulator, _math_sms);
 
       for (int i = 1; i < _num_splits; i++) {
+        // Computation chunk
         input_a_chunk_ptr += input_a_chunk_size * B.element_size();
         output_buf_chunk_ptr += output_chunk_size * _ubuf.element_size();
 
@@ -505,7 +528,10 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
         torch::Tensor workspace_chunk =
             torch::from_blob(workspace_ptr + (i % _stream_compute.size()) * workspace_size_chunk,
                              {workspace_size_chunk}, workspace.options());
+        
         at::cuda::setCurrentCUDAStream(_stream_compute[i % _stream_compute.size()]);
+        //TODO:YOUNGEUNK
+        if (_comm_launch_event && i >= 2) NVTE_CHECK_CUDA(cudaStreamWaitEvent((cudaStream_t)_stream_compute[i % _stream_compute.size()], _comm_launch_event, 0)); //YOUNGEUNK
         te_gemm(input_a_chunk, A_scale_inverse, A_type, transa, B, B_scale_inverse, B_type, transb,
                 output_chunk, D_scale, D_type, D_amax, bias, bias_type, pre_gelu_out, grad,
                 workspace_chunk, workspace_size_chunk, accumulate, use_split_accumulator,
@@ -514,7 +540,6 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
         NVTE_CHECK_CUDA(cudaEventRecord(
             _start_comm, (cudaStream_t)_stream_compute[(i - 1) % _stream_compute.size()]));
         NVTE_CHECK_CUDA(cudaStreamWaitEvent((cudaStream_t)_stream_comm, _start_comm, 0));
-
         // Communication chunk
         if (_ubuf.element_size() == 1) {
           assert(_ubuf_scale_inv_initialized);
@@ -523,13 +548,12 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
               D_type, fp8_type,
               reducescatter2_userbuff_stridedoutput_fp8<fp8_type>(
                   rs_output_ptr, d_scale_inv_ptr, _ub_reg, (i - 1) * output_chunk_size, m_chunk, n,
-                  m, _ub_comm, (cudaStream_t)_stream_comm););
+                  m, _ub_comm, (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event););
         } else {
           reducescatter2_userbuff_stridedoutput(rs_output_ptr, _ub_reg, (i - 1) * output_chunk_size,
                                                 m_chunk, n, m, _ub_comm,
-                                                (cudaStream_t)_stream_comm);
+                                                (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event);
         }
-
         rs_output_ptr += m_chunk * rs_output.element_size();
       }
       int last_compute_stream_id =
@@ -547,11 +571,11 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
             D_type, fp8_type,
             reducescatter2_userbuff_stridedoutput_fp8<fp8_type>(
                 rs_output_ptr, d_scale_inv_ptr, _ub_reg, (_num_splits - 1) * output_chunk_size,
-                m_chunk, n, m, _ub_comm, (cudaStream_t)_stream_comm););
+                m_chunk, n, m, _ub_comm, (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event););
       } else {
         reducescatter2_userbuff_stridedoutput(rs_output_ptr, _ub_reg,
                                               (_num_splits - 1) * output_chunk_size, m_chunk, n, m,
-                                              _ub_comm, (cudaStream_t)_stream_comm);
+                                              _ub_comm, (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event);
       }
     } else {
       for (int i = 0; i < _num_splits; i++) {
