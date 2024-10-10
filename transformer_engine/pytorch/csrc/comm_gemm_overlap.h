@@ -481,7 +481,6 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
     int input_a_chunk_size = m_chunk * k;
     int output_chunk_size = n * m_chunk;
     int workspace_size_chunk = workspaceSize / _stream_compute.size();
-    // printf("!!! [YOUNGEUNK] split_overlap_rs \n");
 
     // Get input, output, and workspace data pointers
     char *input_a_chunk_ptr = reinterpret_cast<char *>(A.data_ptr());
@@ -505,7 +504,6 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
     assert(pre_gelu_out.numel() == 0);
 
     if (gemm_overlap) {
-      // printf("!!! [YOUNGEUNK] split_overlap_rs gemm_overlap \n");
       torch::Tensor input_a_chunk = torch::from_blob(input_a_chunk_ptr, {m_chunk, k}, A.options());
       torch::Tensor output_chunk =
           torch::from_blob(output_buf_chunk_ptr, {n, m_chunk}, _ubuf.options());
@@ -530,8 +528,8 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
                              {workspace_size_chunk}, workspace.options());
         
         at::cuda::setCurrentCUDAStream(_stream_compute[i % _stream_compute.size()]);
-        //TODO:YOUNGEUNK
-        if (_comm_launch_event && i >= 2) NVTE_CHECK_CUDA(cudaStreamWaitEvent((cudaStream_t)_stream_compute[i % _stream_compute.size()], _comm_launch_event, 0)); //YOUNGEUNK
+        //TODO:YOUNGEUNK roll back the FDL work
+        // if (_comm_launch_event && i >= 2) NVTE_CHECK_CUDA(cudaStreamWaitEvent((cudaStream_t)_stream_compute[i % _stream_compute.size()], _comm_launch_event, 0)); //YOUNGEUNK
         te_gemm(input_a_chunk, A_scale_inverse, A_type, transa, B, B_scale_inverse, B_type, transb,
                 output_chunk, D_scale, D_type, D_amax, bias, bias_type, pre_gelu_out, grad,
                 workspace_chunk, workspace_size_chunk, accumulate, use_split_accumulator,
@@ -548,11 +546,11 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
               D_type, fp8_type,
               reducescatter2_userbuff_stridedoutput_fp8<fp8_type>(
                   rs_output_ptr, d_scale_inv_ptr, _ub_reg, (i - 1) * output_chunk_size, m_chunk, n,
-                  m, _ub_comm, (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event););
+                  m, _ub_comm, (cudaStream_t)_stream_comm););
         } else {
           reducescatter2_userbuff_stridedoutput(rs_output_ptr, _ub_reg, (i - 1) * output_chunk_size,
                                                 m_chunk, n, m, _ub_comm,
-                                                (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event);
+                                                (cudaStream_t)_stream_comm);
         }
         rs_output_ptr += m_chunk * rs_output.element_size();
       }
@@ -571,11 +569,11 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
             D_type, fp8_type,
             reducescatter2_userbuff_stridedoutput_fp8<fp8_type>(
                 rs_output_ptr, d_scale_inv_ptr, _ub_reg, (_num_splits - 1) * output_chunk_size,
-                m_chunk, n, m, _ub_comm, (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event););
+                m_chunk, n, m, _ub_comm, (cudaStream_t)_stream_comm););
       } else {
         reducescatter2_userbuff_stridedoutput(rs_output_ptr, _ub_reg,
                                               (_num_splits - 1) * output_chunk_size, m_chunk, n, m,
-                                              _ub_comm, (cudaStream_t)_stream_comm, (cudaEvent_t)_comm_launch_event);
+                                              _ub_comm, (cudaStream_t)_stream_comm);
       }
     } else {
       for (int i = 0; i < _num_splits; i++) {
