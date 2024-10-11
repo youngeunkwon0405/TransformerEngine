@@ -10,6 +10,7 @@ import warnings
 import socket
 import fcntl
 import struct
+from functools import reduce
 from abc import ABC, abstractmethod
 from typing import Dict, Generator, List, Optional, Tuple, Union
 from contextlib import contextmanager
@@ -97,6 +98,8 @@ def initialize_ub(
     global _ub_communicators
     assert _ub_communicators is None, "UB communicators are already initialized."
     _ub_communicators = {}
+    max_connection = int(os.getenv("CUDA_DEVICE_MAX_CONNECTIONS", "8"))
+    print(f'YOUNGEUNK: initialize_ub - max_connection:{max_connection} !!!\n\n')
 
     if tex.ubuf_built_with_mpi():
         # Userbuffers will ignore all these values when it is built with MPI, so these are just
@@ -206,12 +209,21 @@ def initialize_ub(
     ]
     layers_reduce_scatter_overlap = ["proj_fprop", "fc2_fprop", "qkv_wgrad", "fc1_wgrad"]
     dgrad_reduce_scatter_overlap = ["qkv_dgrad", "fc1_dgrad"]
+    
     # Default overlap methods for layers
-    methods = {
-        "ring_exchange": ["qkv_fprop", "fc1_fprop", "proj_dgrad", "fc2_dgrad"],
-        "pipeline": ["proj_fprop", "fc2_fprop"],
-        "bulk": ["qkv_dgrad", "qkv_wgrad", "fc1_dgrad", "fc1_wgrad"],
-    }
+    if max_connection == 1:
+        methods = {
+            "ring_exchange": ["qkv_fprop", "fc1_fprop", "proj_dgrad", "fc2_dgrad"],
+            "pipeline": ["proj_fprop", "fc2_fprop"],
+            "bulk": ["qkv_dgrad", "qkv_wgrad", "fc1_dgrad", "fc1_wgrad"],
+        }
+    else: # Multiple CUDA kernel queues
+        methods = {
+            "ring_exchange": ["qkv_fprop", "fc1_fprop", "proj_dgrad", "fc2_dgrad"],
+            "pipeline": [],
+            "atomic": ["proj_fprop", "fc2_fprop"],
+            "bulk": ["qkv_dgrad", "qkv_wgrad", "fc1_dgrad", "fc1_wgrad"],
+        }
 
     # AG-RS overlap pairs of layers forming a tensor-parallel block
     ag_rs_pairs = {"qkv_fprop": "proj_fprop", "fc1_fprop": "fc2_fprop"}
@@ -236,7 +248,7 @@ def initialize_ub(
             "set_sm_margin": False,
             "num_splits": 4 if method == "pipeline" else tp_size,
             "aggregate": False,
-            "atomic_gemm": False,
+            "atomic_gemm": True if method == "atomic" else False,
             "use_ce": True,
             "fp8_buf": name in layers_all_gather_overlap,
         }
@@ -344,7 +356,7 @@ def initialize_ub(
                 new_method = ub_cfgs[name]["method"]
                 methods[new_method].append(name)
 
-    for name in methods["ring_exchange"] + methods["pipeline"] + methods["bulk"]:
+    for name in reduce(lambda x, y: x + y, methods.values(), []):
         ub_cfg = get_default_config(name)
         if ub_cfgs is not None and name in ub_cfgs:
             fp8_buf = (name in layers_all_gather_overlap) or (

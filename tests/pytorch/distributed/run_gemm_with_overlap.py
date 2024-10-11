@@ -753,7 +753,6 @@ def _main(opts):
                 all_outputs = _fp8_gemm()
                 end_events[i].record()
                 if ub_obj2 is not None:
-                    print('YOUNGEUNK: ub_obj2')
                     _fp8_gemm2(all_outputs[0])
             else:
                 start_events[i].record()
