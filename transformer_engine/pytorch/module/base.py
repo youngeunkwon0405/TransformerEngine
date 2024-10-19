@@ -218,6 +218,8 @@ def initialize_ub(
             "bulk": ["qkv_dgrad", "qkv_wgrad", "fc1_dgrad", "fc1_wgrad"],
         }
     else: # Multiple CUDA kernel queues
+        # When using multiple CUDA kernel queues, we use atomic GEMM as the default option for reduce-scatter overlap. 
+        # For bulk reduce-scatter overlap, launch ordering is configured by the FDL feature.
         methods = {
             "ring_exchange": ["qkv_fprop", "fc1_fprop", "proj_dgrad", "fc2_dgrad"],
             "pipeline": [],
@@ -363,6 +365,7 @@ def initialize_ub(
                 ub_cfgs[name].get("fp8_buf", False) and name in methods["pipeline"]
             )
             ub_cfg.update(ub_cfgs[name])
+            ub_cfg["atomic_gemm"] = ub_cfgs[name]["method"] == "atomic"
             ub_cfg["fp8_buf"] = fp8_buf
         add_ub(name, **ub_cfg)
 
