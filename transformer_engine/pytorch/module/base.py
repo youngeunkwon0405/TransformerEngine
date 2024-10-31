@@ -209,6 +209,8 @@ def initialize_ub(
     ]
     layers_reduce_scatter_overlap = ["proj_fprop", "fc2_fprop", "qkv_wgrad", "fc1_wgrad"]
     dgrad_reduce_scatter_overlap = ["qkv_dgrad", "fc1_dgrad"]
+    global layers_atomic_ring_exchange
+    layers_atomic_ring_exchange = []
     
     # Default overlap methods for layers
     if max_connection == 1:
@@ -220,18 +222,18 @@ def initialize_ub(
     else: # Multiple CUDA kernel queues
         # When using multiple CUDA kernel queues, we use atomic GEMM as the default option for reduce-scatter overlap. 
         # For bulk reduce-scatter overlap, launch ordering is configured by the FDL feature.
+        # YOUNGEUNK: Custom for LLAMA2 70B FSDP
         methods = {
-            "ring_exchange": ["qkv_fprop", "fc1_fprop", "proj_dgrad", "fc2_dgrad"],
-            "pipeline": [],
-            "atomic": ["proj_fprop", "fc2_fprop"],
+            "ring_exchange": ["qkv_fprop", "fc1_fprop","proj_dgrad", "fc2_dgrad"],
+            "pipeline": ["proj_fprop", "fc2_fprop"],
             "bulk": ["qkv_dgrad", "qkv_wgrad", "fc1_dgrad", "fc1_wgrad"],
         }
+        # "atomic": ["proj_fprop", "fc2_fprop"],
+        # layers_atomic_ring_exchange = ["proj_fprop", "fc2_fprop"]
 
     # AG-RS overlap pairs of layers forming a tensor-parallel block
     ag_rs_pairs = {"qkv_fprop": "proj_fprop", "fc1_fprop": "fc2_fprop"}
     rs_ag_pairs = {v: k for k, v in ag_rs_pairs.items()}
-    global layers_atomic_ring_exchange
-    layers_atomic_ring_exchange = []
 
     def get_method(name):
         for method, names in methods.items():
@@ -242,6 +244,7 @@ def initialize_ub(
     def get_default_config(name):
         method = get_method(name)
         is_reduce_scatter = name in layers_reduce_scatter_overlap
+        global layers_atomic_ring_exchange
         default_cfg = {
             "method": method,
             "is_reduce_scatter": is_reduce_scatter,
@@ -250,7 +253,7 @@ def initialize_ub(
             "set_sm_margin": False,
             "num_splits": 4 if method == "pipeline" else tp_size,
             "aggregate": False,
-            "atomic_gemm": True if method == "atomic" else False,
+            "atomic_gemm": True if method == "atomic" or name in layers_atomic_ring_exchange else False,
             "use_ce": True,
             "fp8_buf": name in layers_all_gather_overlap,
         }
